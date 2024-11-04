@@ -6,6 +6,9 @@ authors = ["Rivers Jin"]
 description = "A simple key-value store"
 
 [dependencies]
+tokio = { version = "*", features = ["full"] }
+bytes = { version = "*" }
+async-recursion = { version = "*" }
 
 [build-dependencies]
 built = {version ='*', features = ["git2"]}
