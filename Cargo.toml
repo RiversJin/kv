@@ -1,0 +1,11 @@
+[package]
+name = "kv"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rivers Jin"]
+description = "A simple key-value store"
+
+[dependencies]
+
+[build-dependencies]
+built = {version ='*', features = ["git2"]}
