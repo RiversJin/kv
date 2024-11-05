@@ -9,6 +9,8 @@ description = "A simple key-value store"
 tokio = { version = "*", features = ["full"] }
 bytes = { version = "*" }
 async-recursion = { version = "*" }
+linkme = { version = "*" }
+router-macro = { path = "router_macro" }
 
 [build-dependencies]
 built = {version ='*', features = ["git2"]}

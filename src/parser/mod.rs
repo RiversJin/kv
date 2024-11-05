@@ -3,7 +3,7 @@ use bytes::{Bytes, BytesMut};
 use std::error::Error;
 use async_recursion::async_recursion;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RespValue {
     SimpleString(Bytes),
     Error(Bytes),
@@ -101,7 +101,7 @@ impl RespValue {
 #[derive(Debug)]
 pub struct RespRequest {
     pub command: Bytes,
-    pub arguments: Vec<RespValue>,
+    pub args: Vec<RespValue>,
 }
 
 pub struct RespParser<R: AsyncReadExt> {
@@ -193,7 +193,7 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                 let args = values.iter().skip(1).cloned().collect();
                 Ok(RespRequest {
                     command,
-                    arguments: args,
+                    args,
                 })
             }
 
