@@ -15,7 +15,7 @@ pub fn route(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as syn::ItemFn);
     let fn_name = &input_fn.sig.ident;
     // let fn_name to uppercase
-    let register_name = format!("ROUTE_MAP_REGISTER_{}", fn_name);
+    let register_name = format!("ROUTE_MAP_REGISTER_{}", fn_name.to_string().to_uppercase());
     let register_name = syn::Ident::new(&register_name, proc_macro2::Span::call_site());
 
     // use linkme
@@ -30,7 +30,7 @@ pub fn route(attr: TokenStream, item: TokenStream) -> TokenStream {
     */
 
     let expanded = quote::quote! {
-        // use crate::command_table::RouteHandler;
+        // use crate::command_table::{RouteHandler, ROUTE_MAP};
         #input_fn
 
         #[linkme::distributed_slice(ROUTE_MAP)]
@@ -50,7 +50,7 @@ pub fn init_route_map(attr: TokenStream) -> TokenStream {
         extern crate linkme;
 
         #[linkme::distributed_slice]
-        pub static ROUTE_MAP: [fn() -> (String, RouteHandler)];
+        pub(crate) static ROUTE_MAP: [fn() -> (String, RouteHandler)];
 
         static #route_map_name: std::sync::LazyLock<std::collections::HashMap<String, RouteHandler>> = std::sync::LazyLock::new(|| {
             let mut map = std::collections::HashMap::new();

@@ -1,16 +1,8 @@
 use std::{error::Error, future::Future, pin::Pin, sync::Arc};
 use crate::{context::Context, parser::{RespRequest, RespValue}};
 
-type RouteHandler = fn(context: Arc<Context>, request: RespRequest) -> Pin<Box<dyn Future<Output = Result<RespValue, Box<dyn Error>>> + Send>>;
-
+pub type RouteHandler = fn(context: Arc<Context>, request: RespRequest) -> Pin<Box<dyn Future<Output = Result<RespValue, Box<dyn Error>>> + Send>>;
 router_macro::init_route_map!(ROUTER);
-
-#[router_macro::route("PING")]
-async fn ping(context : Arc<Context>, _request: RespRequest) -> Result<RespValue, Box<dyn Error>> {
-    context.is_timeout()?;
-    context.decrease_retries()?;
-    Ok(RespValue::SimpleString("PONG".into()))
-}
 
 pub fn get_handler(command: &str) -> Result<&'static RouteHandler, Box<dyn Error>> {
     ROUTER.get(command).ok_or(format!("Command <{}> not found", command).into())

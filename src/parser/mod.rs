@@ -1,6 +1,6 @@
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use bytes::{Bytes, BytesMut};
-use std::error::Error;
+use std::{error::Error, sync::LazyLock};
 use async_recursion::async_recursion;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +11,9 @@ pub enum RespValue {
     BulkString(Option<Bytes>),
     Array(Vec<RespValue>),
 }
+
+pub static OK_RESP: LazyLock<RespValue> = LazyLock::new(|| RespValue::SimpleString("OK".into()));
+pub static NULL_RESP: LazyLock<RespValue> = LazyLock::new(|| RespValue::BulkString(None));
 
 pub trait RespWriter: tokio::io::AsyncWrite + Unpin + Send {}
 impl<T> RespWriter for T where T: tokio::io::AsyncWrite + Unpin + Send {}
