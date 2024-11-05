@@ -1,4 +1,4 @@
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use bytes::{Bytes, BytesMut};
 use std::error::Error;
 use async_recursion::async_recursion;
@@ -11,6 +11,92 @@ pub enum RespValue {
     BulkString(Option<Bytes>),
     Array(Vec<RespValue>),
 }
+
+pub trait RespWriter: tokio::io::AsyncWrite + Unpin + Send {}
+impl<T> RespWriter for T where T: tokio::io::AsyncWrite + Unpin + Send {}
+    
+
+impl RespValue {
+    fn get_expected_len(&self) -> usize {
+        match self {
+            RespValue::SimpleString(s) | RespValue::Error(s) => s.len() + 3, // +3 for +\r\n or -\r\n
+            RespValue::Integer(_) => 32, // 32 is enough for i64
+            RespValue::BulkString(s) => s.as_ref().map(|s| s.len()).unwrap_or(0) + 16, // for length or -1 + $\r\n and etc
+            RespValue::Array(arr) => {
+                let mut len = 3; // for *\r\n
+                for v in arr {
+                    len += v.get_expected_len();
+                }
+                len
+            }
+        }
+    }
+
+    async fn write_simple_string(s: &Bytes, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+        writer.write_all(b"+").await?;
+        writer.write_all(&s).await?;
+        writer.write_all(b"\r\n").await?;
+        Ok(())
+    }
+
+    async fn write_error(s: &Bytes, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+        writer.write_all(b"-").await?;
+        writer.write_all(&s).await?;
+        writer.write_all(b"\r\n").await?;
+        Ok(())
+    }
+
+    async fn write_integer(i: i64, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+        writer.write_all(b":").await?;
+        writer.write_all(i.to_string().as_bytes()).await?;
+        writer.write_all(b"\r\n").await?;
+        Ok(())
+    }
+
+    async fn write_bulk_string(s: &Option<Bytes>, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+        match s {
+            Some(s) => {
+                writer.write_all(b"$").await?;
+                writer.write_all(s.len().to_string().as_bytes()).await?;
+                writer.write_all(b"\r\n").await?;
+                writer.write_all(&s).await?;
+                writer.write_all(b"\r\n").await?;
+            }
+            None => {
+                writer.write_all(b"$-1\r\n").await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[async_recursion]
+    async fn write_array(arr: &[RespValue], writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+        writer.write_all(b"*").await?;
+        writer.write_all(arr.len().to_string().as_bytes()).await?;
+        writer.write_all(b"\r\n").await?;
+        for v in arr {
+            v.write(writer).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn write(&self, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>>{
+        let expected_len = self.get_expected_len();
+        let mut writer = BufWriter::with_capacity(expected_len, writer);
+
+        match self {
+            RespValue::SimpleString(value) => Self::write_simple_string(value, &mut writer).await?,
+            RespValue::Error(value) => Self::write_error(value, &mut writer).await?,
+            RespValue::Integer(value) => Self::write_integer(*value, &mut writer).await?,
+            RespValue::BulkString(value) => Self::write_bulk_string(value, &mut writer).await?,
+            RespValue::Array(value) => Self::write_array(value, &mut writer).await?,
+        }
+
+        writer.flush().await?;
+        Ok(())
+    }
+}
+
 
 #[derive(Debug)]
 pub struct RespRequest {
