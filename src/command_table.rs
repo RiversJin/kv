@@ -1,11 +1,12 @@
-use std::{error::Error, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 use crate::{context::Context, parser::{RespRequest, RespValue}};
+use anyhow::{anyhow, Result};
 
-pub type RouteHandler = fn(context: Arc<Context>, request: RespRequest) -> Pin<Box<dyn Future<Output = Result<RespValue, Box<dyn Error>>> + Send>>;
+pub type RouteHandler = fn(context: Arc<Context>, request: RespRequest) -> Pin<Box<dyn Future<Output = Result<RespValue>> + Send>>;
 router_macro::init_route_map!(ROUTER);
 
-pub fn get_handler(command: &str) -> Result<&'static RouteHandler, Box<dyn Error>> {
-    ROUTER.get(command).ok_or(format!("Command <{}> not found", command).into())
+pub fn get_handler(command: &str) -> Result<&'static RouteHandler> {
+    ROUTER.get(command).ok_or(anyhow!("Command not found {}", command))
 }
 
 
@@ -15,7 +16,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn is_ping_exsits() -> Result<(), Box<dyn Error>> {
+    async fn is_ping_exsits() -> Result<()> {
         let command = "PING";
         let handler = ROUTER.get(command).unwrap();
         let context = Arc::new(Context::new(None, 3));

@@ -1,7 +1,8 @@
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use bytes::{Bytes, BytesMut};
-use std::{error::Error, sync::LazyLock};
+use bytes::Bytes;
+use std::sync::LazyLock;
 use async_recursion::async_recursion;
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RespValue {
@@ -35,28 +36,37 @@ impl RespValue {
         }
     }
 
-    async fn write_simple_string(s: &Bytes, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+    pub fn as_str(&self) -> Result<&str> {
+        match self {
+            RespValue::SimpleString(s) => Ok(unsafe{ std::str::from_utf8_unchecked(s) }),
+            RespValue::BulkString(Some(s)) => Ok(unsafe{ std::str::from_utf8_unchecked(s) }),
+            RespValue::BulkString(None) => Err(anyhow!("Null bulk string is invalid")),
+            _ => Err(anyhow!("Invalid type to convert to string")),
+        }
+    }
+
+    async fn write_simple_string(s: &Bytes, writer: &mut impl RespWriter) -> Result<()> {
         writer.write_all(b"+").await?;
         writer.write_all(&s).await?;
         writer.write_all(b"\r\n").await?;
         Ok(())
     }
 
-    async fn write_error(s: &Bytes, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+    async fn write_error(s: &Bytes, writer: &mut impl RespWriter) -> Result<()> {
         writer.write_all(b"-").await?;
         writer.write_all(&s).await?;
         writer.write_all(b"\r\n").await?;
         Ok(())
     }
 
-    async fn write_integer(i: i64, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+    async fn write_integer(i: i64, writer: &mut impl RespWriter) -> Result<()> {
         writer.write_all(b":").await?;
         writer.write_all(i.to_string().as_bytes()).await?;
         writer.write_all(b"\r\n").await?;
         Ok(())
     }
 
-    async fn write_bulk_string(s: &Option<Bytes>, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+    async fn write_bulk_string(s: &Option<Bytes>, writer: &mut impl RespWriter) -> Result<()> {
         match s {
             Some(s) => {
                 writer.write_all(b"$").await?;
@@ -73,27 +83,31 @@ impl RespValue {
     }
 
     #[async_recursion]
-    async fn write_array(arr: &[RespValue], writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>> {
+    async fn write_array(arr: &[RespValue], writer: &mut impl RespWriter) -> Result<()> {
         writer.write_all(b"*").await?;
         writer.write_all(arr.len().to_string().as_bytes()).await?;
         writer.write_all(b"\r\n").await?;
         for v in arr {
-            v.write(writer).await?;
+            v.write_dispatch(writer).await?;
         }
         Ok(())
     }
 
-    pub async fn write(&self, writer: &mut impl RespWriter) -> Result<(), Box<dyn Error>>{
+    async fn write_dispatch(&self, writer: &mut impl RespWriter) -> Result<()> {
+        match self {
+            RespValue::SimpleString(value) => Self::write_simple_string(value, writer).await?,
+            RespValue::Error(value) => Self::write_error(value, writer).await?,
+            RespValue::Integer(value) => Self::write_integer(*value, writer).await?,
+            RespValue::BulkString(value) => Self::write_bulk_string(value, writer).await?,
+            RespValue::Array(value) => Self::write_array(value, writer).await?,
+        }
+        Ok(())
+    }
+
+    pub async fn write(&self, writer: &mut impl RespWriter) -> Result<()>{
         let expected_len = self.get_expected_len();
         let mut writer = BufWriter::with_capacity(expected_len, writer);
-
-        match self {
-            RespValue::SimpleString(value) => Self::write_simple_string(value, &mut writer).await?,
-            RespValue::Error(value) => Self::write_error(value, &mut writer).await?,
-            RespValue::Integer(value) => Self::write_integer(*value, &mut writer).await?,
-            RespValue::BulkString(value) => Self::write_bulk_string(value, &mut writer).await?,
-            RespValue::Array(value) => Self::write_array(value, &mut writer).await?,
-        }
+        self.write_dispatch(&mut writer).await?;
 
         writer.flush().await?;
         Ok(())
@@ -107,6 +121,7 @@ pub struct RespRequest {
     pub args: Vec<RespValue>,
 }
 
+
 pub struct RespParser<R: AsyncReadExt> {
     reader: BufReader<R>,
 }
@@ -119,13 +134,17 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
     }
 
     #[async_recursion]
-    pub async fn parse(&mut self) -> Result<RespValue, Box<dyn Error>> {
+    pub async fn parse(&mut self) -> Result<RespValue> {
         let mut line = Vec::new();
         self.reader.read_until(b'\n', &mut line).await?;
 
         let length = line.len();
         if length < 3 {
-            return Err("Invalid line".into());
+            if length == 0 {
+                return Err(anyhow!("EOF"));
+            }
+
+            return Err(anyhow!("Invalid line {:?}", line));
         }
 
         let first_char = line[0];
@@ -160,10 +179,11 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                     return Ok(RespValue::BulkString(Some(Bytes::new())));
                 }
 
-                let mut buf = BytesMut::with_capacity(cnt as usize);
+                let mut buf = vec![0; cnt as usize + 2]; // +2 for \r\n
                 self.reader.read_exact(&mut buf).await?;
-                self.reader.read_until(b'\n', &mut line).await?;
-                Ok(RespValue::BulkString(Some(buf.freeze())))
+                let buf = Bytes::from(buf).slice(0..cnt as usize);
+  
+                Ok(RespValue::BulkString(Some(buf)))
             }
 
             // array
@@ -177,11 +197,11 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                 }
                 Ok(RespValue::Array(array))
             }
-            _ => Err(format!("Invalid character: {}", first_char).into())
+            _ => Err(anyhow!("Invalid character: {}", first_char))
         }
     }
 
-    pub async fn parse_request(&mut self) -> Result<RespRequest, Box<dyn Error>> {
+    pub async fn parse_request(&mut self) -> Result<RespRequest> {
         match self.parse().await? {
             RespValue::Array(values) => {
                 let command = values
@@ -191,7 +211,7 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                         RespValue::BulkString(Some(cmd)) => Some(cmd.clone()),
                         _ => None,
                     })
-                    .ok_or(format!("Invalid command <{:?}>", values))?;
+                    .ok_or(anyhow!("Invalid command <{:?}>", values))?;
 
                 let args = values.iter().skip(1).cloned().collect();
                 Ok(RespRequest {
@@ -200,7 +220,7 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                 })
             }
 
-            content => Err(format!("Invalid request <{:?}>", content).into()),
+            content => Err(anyhow!("Invalid request <{:?}>", content).into()),
         }
     }
 

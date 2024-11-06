@@ -12,5 +12,13 @@ async-recursion = { version = "*" }
 linkme = { version = "*" }
 router-macro = { path = "router_macro" }
 
+serde = { version = "*", features = ["derive"] }
+serde_yaml = { version = "*" }
+clap = { version = "4.5.20", features = ["derive"] }
+static_assertions = { version = "*" }
+
+anyhow = { version = "*" , features = ["backtrace"] }
+
+
 [build-dependencies]
 built = {version ='*', features = ["git2"]}
