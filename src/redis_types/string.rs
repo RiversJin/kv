@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use tokio::sync::RwLock;
-use core::str;
-use anyhow::{anyhow, Result};
+use crate::error::*;
 use std::sync::LazyLock;
 use std::sync::Arc;
 use crate::parser::OK_RESP;
@@ -12,10 +11,21 @@ static STRING_MAP: LazyLock<RwLock<std::collections::HashMap<String, String>>> =
     RwLock::new(std::collections::HashMap::new())
 });
 
+enum ExistCond {
+    // if key not exists
+    NX,
+    // if key exists
+    XX,
+}
+
+struct SetOption {
+    exist_cond: Option<ExistCond>,
+}
+
 #[router_macro::route("SET")]
 async fn set(_context : Arc<Context>, request: RespRequest) -> Result<RespValue> {
     let args = request.args.as_slice();
-    if args.len() != 2{
+    if args.len() < 2 {
         Err(anyhow!("SET command must have 2 arguments"))?;
     }
 

@@ -18,6 +18,7 @@ clap = { version = "4.5.20", features = ["derive"] }
 static_assertions = { version = "*" }
 
 anyhow = { version = "*" , features = ["backtrace"] }
+thiserror = "*"
 
 
 [build-dependencies]
