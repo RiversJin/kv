@@ -45,6 +45,21 @@ impl RespValue {
         }
     }
 
+    pub fn as_i64(&self) -> Result<i64> {
+        match self {
+            RespValue::Integer(i) => Ok(*i),
+            _ => Err(anyhow!("Invalid type to convert to i64")),
+        }
+    }
+
+    pub fn as_bytes(&self) -> Result<&Bytes> {
+        match self {
+            RespValue::BulkString(Some(s)) => Ok(s),
+            RespValue::BulkString(None) => Err(anyhow!("Null bulk string is invalid")),
+            _ => Err(anyhow!("Invalid type to convert to bytes")),
+        }
+    }
+
     async fn write_simple_string(s: &Bytes, writer: &mut impl RespWriter) -> Result<()> {
         writer.write_all(b"+").await?;
         writer.write_all(&s).await?;
@@ -133,7 +148,6 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
         }
     }
 
-    #[async_recursion]
     pub async fn parse(&mut self) -> Result<RespValue> {
         let mut line = Vec::new();
         self.reader.read_until(b'\n', &mut line).await?;
@@ -192,7 +206,7 @@ impl<R: AsyncReadExt + Unpin + Send> RespParser<R> {
                 let mut array = Vec::with_capacity(cnt);
 
                 for _ in 0..cnt {
-                    let value = self.parse().await?;
+                    let value = Box::pin(self.parse()).await?;
                     array.push(value);
                 }
                 Ok(RespValue::Array(array))

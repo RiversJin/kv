@@ -1,7 +1,9 @@
 use bytes::Bytes;
+use itertools::Itertools;
+use itertools::PeekingNext;
 use tokio::sync::RwLock;
-use core::str;
-use anyhow::{anyhow, Result};
+use crate::error::*;
+use core::time;
 use std::sync::LazyLock;
 use std::sync::Arc;
 use crate::parser::OK_RESP;
@@ -12,36 +14,89 @@ static STRING_MAP: LazyLock<RwLock<std::collections::HashMap<String, String>>> =
     RwLock::new(std::collections::HashMap::new())
 });
 
-#[router_macro::route("SET")]
-async fn set(_context : Arc<Context>, request: RespRequest) -> Result<RespValue> {
-    let args = request.args.as_slice();
-    if args.len() != 2{
-        Err(anyhow!("SET command must have 2 arguments"))?;
-    }
-
-    let key = args[0].as_str()?;
-    let value = args[1].as_str()?;
-    
-
-    let mut map = STRING_MAP.write().await;
-    map.insert(key.to_string(), value.to_string());
-
-    Ok(OK_RESP.clone())
+#[derive(Debug)]
+enum ExistCond {
+    None,
+    // if key not exists
+    NX,
+    // if key exists
+    XX,
 }
 
-#[router_macro::route("GET")]
-async fn get(_context : Arc<Context>, request: RespRequest) -> Result<RespValue> {
-    let args = request.args.as_slice();
-    if args.len() != 1{
-        Err(anyhow!("GET command must have 1 argument"))?;
+#[derive(Debug)]
+enum Expiration {
+    None,
+    KeepTTL,
+    Deadline(chrono::DateTime<chrono::Utc>),
+}
+
+#[derive(Debug)]
+struct SetOption {
+    exist_cond: Option<ExistCond>,
+    // return old value if key exists
+    get: bool,
+    expire: Expiration,
+}
+
+struct SetCommand {
+    key: Bytes,
+    value: Bytes,
+    option: SetOption,
+}
+
+fn prase_set_command(request: RespRequest) -> Result<SetCommand> {
+    let mut arg_iter = request.args.into_iter();
+    let wrong_arg_number = || Error::WrongArgNumber("set".into());
+
+    let key = arg_iter.next().ok_or_else(wrong_arg_number)?.as_bytes()?.clone();
+    let value = arg_iter.next().ok_or_else(wrong_arg_number)?.as_bytes()?.clone();
+
+    let mut option = SetOption {
+        exist_cond: None,
+        get: false,
+        expire: Expiration::None,
+    };
+
+    let mut iter = arg_iter.peekable();
+    while let Some(arg) = iter.next() {
+        match arg.as_str()? {
+            "EX" => {
+                let expire_sec = iter.next().ok_or(Error::Syntax)?.as_i64()?;
+                let deadline = chrono::Utc::now() + chrono::Duration::seconds(expire_sec);
+                option.expire = Expiration::Deadline(deadline);
+            }
+            "PX" => {
+                let expire_ms = iter.next().ok_or(Error::Syntax)?.as_i64()?;
+                let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(expire_ms);
+                option.expire = Expiration::Deadline(deadline);
+            }
+            "NX" => {
+                option.exist_cond = Some(ExistCond::NX);
+            }
+            "XX" => {
+                option.exist_cond = Some(ExistCond::XX);
+            }
+            "KEEPTTL" => {
+                option.expire = Expiration::KeepTTL;
+            }
+            "GET" => {
+                option.get = true;
+            }
+            _ => Err(Error::Syntax)?
+        }
     }
 
-    let key = args[0].as_str()?;
+    Ok(SetCommand{
+        key,
+        value,
+        option,
+    })
+}
 
-    let map = STRING_MAP.read().await;
-    let value = map.get(key);
+async fn set(_context : Arc<Context>, request: RespRequest) -> Result<RespValue> {
+    todo!("set")
+}
 
-    let value = value.map(|v| Bytes::copy_from_slice(v.as_bytes()));
-
-    Ok(RespValue::BulkString(value))
+async fn get(_context : Arc<Context>, request: RespRequest) -> Result<RespValue> {
+    todo!("get")
 }
